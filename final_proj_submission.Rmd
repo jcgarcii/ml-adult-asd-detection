@@ -228,11 +228,120 @@ This concludes the analysis and exploration portion of our dataset. We now move 
 
 ### Data Preparation
 
+#### Data Split
+
+```{r}
+# Set Seed
+set.seed(1)
+
+# Test Split
+train.sample <- createDataPartition(data$`Class/ASD`, p=0.9, list=FALSE)
+train.data <- data[train.sample, ]
+test.data <- data[-train.sample, ]
+
+# Labels 
+test.data.labels <- test.data$'Class/ASD'
+```
+
+Additionally, since some of our future models will require us to have a separate validation set (namely, neural networks) - we perform as such below. 
+
+In order to not mess with the original splits (once we add imputed values), we also set the seed again. Note: we will use the CNN training set to compute imputations to avoid any possible leakage.  
+
+```{r}
+set.seed(1)
+
+# Validation Split (CNN)
+cnn.sample <- createDataPartition(train.data$`Class/ASD`, p=0.9, list=FALSE)
+
+cnn.train <- train.data[cnn.sample, ]
+cnn.validation <- train.data[-cnn.sample, ]
+
+cnn.test <- test.data
+cnn.test.labels <- test.data.labels
+
+```
+
+Further setup will be required for the CNN datasets before they are digestable for our neural network models. This will be performed ahead after further refinement. 
+
 #### Imputation
 
+As we examined in the data exploration portion of this report, we find three main variables with missing values: age, ethnicity, and relation. 
 
+With age missing only 0.28% of its total values, this points to its missing values being by chance rather than of that of systemic reason. For this reason, we will simply use the mean of age to impute the missing values using the training data, below, in order to avoid any spill.
+
+
+```{r}
+data$age[is.na(data$age)] <- floor(mean(cnn.train$age, na.rm=TRUE))
+```
+
+As discussed in the exploration phase of our project, we found that the ethnicity and relation variable were not only both missing the same number of entries, but were also missing the same entries in addition to missing more than 13% of the total entries in the dataset. 
+
+For these reasons, we will take a different approach - due to the sheer number of missing entries, we will create an additional category, unknown. 
+Additionally, due to both variables missing the same entries, we will create an additional variable, missing_background, to indicate if the candidate was missing these values. 
+
+```{r}
+# New Indicator Feature
+data$missing_background <- is.na(data$relation) & is.na(data$ethnicity)
+
+# Impution of Missing Values
+t <- c("relation", "ethnicity")
+
+data <- data %>%
+  mutate(
+    across(all_of(t),
+           ~ ifelse(data$missing_background, "Unknown", .))
+  )
+
+
+colSums(is.na(data))
+
+```
+
+We find that we have successfully handled all missing values on our dataset. 
+
+We move to resplit our data, to properly ensure that none of our datasets have any missing values.
+
+```{r}
+# Set Seed
+set.seed(1)
+
+# Test Split
+train.sample <- createDataPartition(data$`Class/ASD`, p=0.9, list=FALSE)
+train.data <- data[train.sample, ]
+test.data <- data[-train.sample, ]
+
+# Labels 
+test.data.labels <- test.data$'Class/ASD'
+
+# Prune Outcome Variable
+test.data <- test.data %>%
+  select(-`Class/ASD`)
+
+## CNN Split 
+set.seed(1)
+
+# Validation Split (CNN)
+cnn.sample <- createDataPartition(train.data$`Class/ASD`, p=0.9, list=FALSE)
+
+cnn.train <- train.data[cnn.sample, ]
+cnn.train.labels <- cnn.train$`Class/ASD`
+
+cnn.validation <- train.data[-cnn.sample, ]
+cnn.validation.labels <- cnn.validation$`Class/ASD`
+
+cnn.test <- test.data
+cnn.test.labels <- test.data.labels
+
+# Prune
+cnn.train <- cnn.train %>%
+  select(-`Class/ASD`)
+cnn.validation <- cnn.validation %>%
+  select(-`Class/ASD`)
+
+```
 
 ## Benchmark 
+
 
 ## Models 
 
