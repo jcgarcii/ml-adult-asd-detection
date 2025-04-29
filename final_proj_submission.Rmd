@@ -1,0 +1,242 @@
+---
+title: "Adult Autism Spectrum Disorder Screening with ML"
+author: "Ryan Mills & J. Carlos Garcia"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+
+
+## Background 
+
+### Libraries
+Libraries used in Project
+```{r, echo=TRUE, results='hide'}
+library(foreign)
+library(dplyr)
+library(caret)
+library(glmnet)
+library(mltools)
+library(data.table)
+library(keras)
+library(tfruns)
+library(iml)
+library(mlr)
+library(fairness)
+```
+
+### Prefixes
+
+**General Prefixes**
+
+| Prefix  | Meaning               |
+|:--------|:----------------------|
+| `f.*`   | Functions              |
+| `model.*` | Models               |
+| `p.*`   | Predictions            |
+| `t.*`   | Temporary Variables    |
+
+
+**Model-Specific Prefixes**
+
+| Prefix   | Associated Model              |
+|:---------|:-------------------------------|
+| `risk.*` | Benchmark Model                |
+| `lasso.*` | Lasso Linear Model             |
+| `ridge.*` | Ridge Linear Model             |
+| `enet.*`  | Elastic Net Linear Model       |
+| `rf.*`    | Random Forest                  |
+| `gbm.*`   | Gradient Boosted Machine       |
+| `svm.*`   | Support Vector Machine (SVM)   |
+| `cnn.*`   | Neural Network (CNN)           |
+| `fair.*`  | Fairness Analysis Section      |
+
+
+## Data Analysis and Exploration 
+Performed by: J. Carlos Garcia
+
+### Data Exploration 
+
+#### Dataset
+
+We begin by importing our data. 
+```{r}
+data <- read.arff("Autism-Adult-Data.arff")
+```
+
+Our dataset is in the arff format, requiring us to use the read.arff() function out of the foreign package. This file format is very convenient as it clearly defines attributes, realtions, and data in the file - allowing us to not have to perform as.factor() or as.numeric functions manually to begin with. 
+
+#### Summary
+```{r}
+summary(data)
+```
+
+Taking a look at the summary of the dataset, we find A1-A10 binary scores, these are questions on AQ-10 questionnaire used for determining if adults should be referred to take an autism assessment. A 1 or 0 indicates a point in this questionaire which are tallied. These questionnaire features are not a true indicator of autism spectrum disorder (ASD) as these only dictate who is referred and who is not for a true diagnosis test, as highlighted in the result feature. 
+
+Our dataset has several demographic features in addition to the screening questionaire features such as age, gender, ethnicity, country of residence, and a few background features such as born with jandice, a family member had a previous diagnosis (titled "autism" on the columns), 
+
+Additionally, we have our outcome variable Class/ASD which signifies if a candidate had a positive or negative outcome for ASD. 
+
+Lastly, we can also find that there is an imbalance in the outcome variable, this mirrors the current understanding of ASD distribution amongst a general population, 1 in 31. 
+
+It is also worth noting that both our variables were imported as intended due to the file type. Therefore, we do not need to factorize our features. 
+
+#### Missing Values
+
+Before the data preparation, and even analysis, we must look to see if there are any substantial missing values and examine the nature of the missing values as this will shape up our strategy for imputation later in the preparation stage. 
+
+```{r}
+t=colSums(is.na(data))
+cat("Columns with Missing Values:\n")
+t[t>0]
+
+k <- round((t/nrow(data))*100, 2)
+cat("\nPercentage of Missing Values in Identified Columns:\n")
+k[k>0]
+```
+We find that there is a total of three columns with missing values, with age being the one that seems to be of random nature as opposed to systemic. Additionally, it is interesting to see that both ethnicity and relation both have the same number of missing columns. 
+
+Let's explore this avenue:
+```{r}
+t=is.na(data$ethnicity)
+k=is.na(data$relation)
+which(t != k)
+```
+
+We find that the ethnicity and relation features are both missing values in the same entries, this confirms our initial thoughts on these values being systemic. 
+
+We will use a method combination to indicate a missing value in these features later on in imputation for these two. 
+
+### Data Analysis
+
+#### Feature Pruning
+Before we dive into data analysis, we first remove the "age_desc" variable from our data. As seen below, every single entry in our table is TRUE (or 1). Additionally, as this dataset is for "adults only" this variable was implied - therefore, it serves no value for our current uses - it was possibly left in from a previous data partitioning effort by the owners of the dataset. 
+```{r}
+data <- data %>%
+  select(-age_desc)
+```
+
+#### Statistical Analysis
+
+Below are functions that I previously used in another project in this course, these functions apply the appropriate test depending on the type of independent variable. 
+
+```{r}
+#NOTE: All helper functions were previously used in assignment 3
+
+f.examine.numeric <- function(dependent, independent, x.name, y.name){
+  # Presentation
+  t.name <- paste("BoxPlot of", x.name, "vs.", y.name)
+  
+  # Plot
+  boxplot(independent ~ dependent, main = t.name)
+
+  # Split groups
+  f <- independent[dependent == "false"]
+  t <- independent[dependent == "true"]
+  
+  # Shapiro Length Requirements
+  t.f <- if (length(f) >= 3 && length(f) <= 5000) shapiro.test(f)$p.value >= 0.05 else TRUE
+  t.t <- if (length(t) >= 3 && length(t) <= 5000) shapiro.test(t)$p.value >= 0.05 else TRUE
+
+  # Parametric Check
+  if (t.f && t.t) {
+    k <- t.test(independent ~ dependent)
+  } else {
+    k <- kruskal.test(independent ~ dependent)
+  }
+
+  association <- k$p.value < 0.01
+  return(association)
+}
+
+
+
+f.examine.categorical <- function(dependent, independent, x.name, y.name){
+  # Presentation
+  t.name <- paste("BoxPlot of", x.name, "vs.", y.name)
+  
+  t.table <- table(independent, dependent)
+  
+  mosaicplot(t.table, main=t.name, shade=TRUE)
+  
+  k <- chisq.test(t.table)
+  
+  association <- k$p.value < 0.01
+  
+  return(association)
+}
+
+
+f.examine.ordinal <- function(dependent, independent, x.name, y.name){
+  # Presentation
+  t.name <- paste("BoxPlot of", x.name, "vs.", y.name)
+  
+  boxplot(independent~dependent, main = t.name, col = "red")
+  
+  k <- kruskal.test(independent~dependent)
+  
+  association <- k$p.value < 0.01
+  
+  return(association)
+}
+
+```
+
+Now, we perform analysis on our dataset. 
+
+```{r}
+# Outcome Dataframe 
+t <- data.frame(independent = character(),
+                association = logical(),
+                stringsAsFactors = FALSE)
+
+# Dependent Variable
+dependent <- data$`Class/ASD`
+y <- "Class/ASD"
+
+# Loop to Find Association(s)
+for (x in names(data)[!names(data) %in% "Class/ASD"]) {
+    independent <- data[[x]]
+    
+    if (is.numeric(independent)) {
+      outcome <- f.examine.numeric(dependent, independent, x, y)
+    } else {
+      if (is.ordered(independent)) {
+        outcome <- f.examine.ordinal(dependent, independent, x, y)
+      } else {
+        outcome <- f.examine.categorical(dependent, independent, x, y)
+      }
+    }
+    
+    t <- rbind(t, data.frame(independent = x, association = outcome))
+}
+
+# Filter No Association
+t %>% filter(!association)
+
+```
+
+We find 5 variables that were found to have no association with the outcome variable: age, gender, jundice, used_app_before, and relation. 
+
+Looking through the graphical representations of these relationships, it is interesting to note that the A1-A10 scores were showing clear association. 
+
+This concludes the analysis and exploration portion of our dataset. We now move to prepare our dataset for training a few models. 
+
+### Data Preparation
+
+#### Imputation
+
+
+
+## Benchmark 
+
+## Models 
+
+## Performance
+
+## Ethics
+
