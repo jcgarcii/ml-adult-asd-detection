@@ -568,8 +568,248 @@ cat("Accuracy:", round(risk.accuracy, 4), "\n")
 
 Despite the benchmark model seemingly performing well on the crosstable, we find that it disproportionately picked NO. Our benchmark is very biased and is likely to label a candidate with ASD as NO. 
 
-## Basic Models 
-Performed by 
+## Simple Models 
+Performed by J. Carlos Garcia
+
+#### Regularized Linear Regression Models
+
+While our CNN models rely on a dedicated validation set, the models in this section will instead use cross-validation via the caret package. This approach allows our models to access as much training data as possible while still providing reliable performance estimates.
+
+We apply 5-fold cross-validation, as it provides a good balance between minimizing overfitting and preserving sufficient training data per fold. This setup also ensures consistency when comparing performance across models.
+
+**LASSO**
+
+We begin with a LASSO regularization method, linear regression model. 
+
+```{r}
+set.seed(1)
+
+lasso.ctrl <- trainControl("cv", number=5)
+lasso.grid <- expand.grid(alpha=1,lambda=10^seq(-3, 3, length=100))
+
+model.lasso <- caret::train(Outcome ~ .,
+                            data = train.data,
+                            method = "glmnet",
+                            trControl = lasso.ctrl,
+                            tuneGrid = lasso.grid)
+
+```
+
+Above, we trained our linear regression model using the LASSO regularization method. LASSO regularization performs variable selection and regularization of the model's coefficents which improves generalization (in theory) and interpretability by shrinking or eliminating less important features.
+
+Our model, as will our other models below, use auto tuning of its parameters. For a linear regression model, we are tuning the regularization strength parameter, lambda, which controls the degree to which large coefficients are penalized, encouraging sparsity and simpler models
+
+Additionally, as explained, we use the caret package to perform cross-validation folding which splits the data into equal subsets based on the specified number of folds parameter. This allows for multiple models to be trained, returning the optimal model (variance effect), paired with our LASSO regularization, resulting in a lambda value that minimizes classification error across validation folds. 
+
+With this in mind, we find that LASSO produces the following:
+
+```{r}
+lasso.coef <- coef(model.lasso$finalModel, model.lasso$bestTune$lambda)
+lasso.coef
+```
+
+We find that for our LASSO linear regression model, a single variable — result — explains nearly all the variance in predicting ASD outcomes. In other words, LASSO identified result, the pre-screening questionnaire score, as the most important feature for determining whether a candidate receives a positive ASD diagnosis.
+
+With a predicted probability of 95.5%, the model suggests that a candidate with a sufficiently high result score is highly likely to receive a positive outcome. This reinforces the pivotal role of the pre-screening survey in the overall diagnostic journey.
+
+
+**RIDGE**
+
+Before we train our RIDGE Linear Regression Model, we note a distinction between the two models. 
+
+Unlike LASSO, Ridge regularization does not have the ability to eliminate variables from the model. 
+
+While LASSO can shrink some coefficients all the way to zero — effectively removing less important features — Ridge instead shrinks all coefficients toward zero, but retains all variables in the model. This makes Ridge particularly effective in settings where many predictors contribute small but meaningful effects.
+
+```{r}
+set.seed(1)
+
+ridge.ctrl <- trainControl("cv", number=5)
+ridge.grid <- expand.grid(alpha=0,lambda=10^seq(-3, 3, length=100))
+
+model.ridge <- caret::train(Outcome ~ .,
+                            data = train.data,
+                            method = "glmnet",
+                            trControl = ridge.ctrl,
+                            tuneGrid = ridge.grid)
+
+```
+
+RIDGE operates similarly to our LASSO model in terms of overall workflow: the goal is to fine-tune the lambda parameter to strike a balance between model complexity and classification performance. However, unlike LASSO, 
+
+As mentioned, RIDGE does not eliminate variables; instead, it shrinks all coefficients, preserving the contribution of each feature while reducing their overall magnitude.
+
+
+```{r}
+ridge.coef <- coef(model.ridge$finalModel, model.ridge$bestTune$lambda)
+ridge.coef
+```
+
+As we see above, the RIDGE model preserves all variables, of note - it assigns a coefficent of 0.35 to result, a massive difference betwene our two models. This difference offers insight to the functional differences between the two regularization methods. 
+
+**Elastic Net**
+
+Elastic Net (enet) combines the penalties of both LASSO (L1) and RIDGE (L2). It introduces an additional variable, alpha, which controls the balance between L1 and L2, with lambda holding its traditional regularization strength intention. 
+
+The alpha balance between L1 and L2 is as follows:
+
+alpha=1, regularization is performed by LASSO 
+alpha=0, regularization is performed by RIDGE
+0 < alpha < 1, regularization is performed by both. 
+
+We train our enet model below, using the same auto tuning methods and cross-validation function as for the other two models. 
+
+```{r}
+set.seed(1)
+
+enet.ctrl <- trainControl("cv", number=5)
+enet.grid <- expand.grid(alpha=seq(0,1,length=10)
+                         ,lambda=10^seq(-3, 3, length=100))
+
+model.enet <- caret::train(Outcome ~ .,
+                            data = train.data,
+                            method = "glmnet",
+                            trControl = enet.ctrl,
+                            tuneGrid = enet.grid)
+
+```
+
+Our model produces the following coefficients:
+
+```{r}
+cat("\nWith an alpha of ", model.enet$bestTune$alpha, "we attain the following coefficients\n\n")
+
+enet.coef <- coef(model.enet$finalModel, model.enet$bestTune$lambda)
+enet.coef
+```
+
+With an alpha value of 1, we find that enet gave full control to the LASSO regularization method, resulting in the same coefficient and weight on result. This also implies that the LASSO method outperforms the RIDGE method on validation data. 
+
+#### Regularized Forest Models
+
+TODO: WRITEUP
+
+**Random Forest Model**
+
+TODO: WRITEUP
+
+```{r}
+set.seed(1)
+
+rf.ctrl <- trainControl("cv", number=5)
+rf.grid <- expand.grid(mtry=c(2, 4, 8, 16))
+
+model.rf <- caret::train(Outcome ~ .,
+                         data = train.data,
+                         method = "rf",
+                         metric="Kappa",
+                         trControl = rf.ctrl,
+                         tuneGrid = rf.grid,
+                         importance=T
+                         )
+
+
+```
+
+TODO: WRITEUP
+
+```{r}
+rf.varimp <- varImp(model.rf)
+rf.varimp
+```
+
+TODO: WRITEUP
+
+**Gradient Boosted Tree Model**
+
+TODO: WRITEUP
+
+```{r}
+set.seed(1)
+
+gbm.ctrl <- trainControl("cv", number=5)
+
+model.gbm <- caret::train(Outcome ~ .,
+                         data = train.data,
+                         method = "gbm",
+                         trControl = gbm.ctrl,
+                         verbose=FALSE
+                         )
+
+
+```
+
+TODO: WRITEUP
+
+```{r}
+gbm.varimp <- varImp(model.gbm)
+gbm.varimp
+```
+
+#### Support Vector Machines
+
+TODO: WRITEUP
+
+**Linear SVM**
+
+TODO: WRITEUP
+
+```{r}
+set.seed(1)
+
+# the same for both
+svm.ctrl <- trainControl("cv", number=5)
+
+model.svm.linear <- caret::train(Outcome ~ .,
+                         data = train.data,
+                         method = "svmLinear",
+                         trControl = svm.ctrl, preProcess=c("center", "scale")
+                         )
+
+
+```
+
+TODO: WRITEUP
+
+**Linear SVM**
+
+TODO: WRITEUP
+
+```{r}
+set.seed(1)
+
+# the same for both
+svm.ctrl <- trainControl("cv", number=5)
+
+model.svm.radial <- caret::train(Outcome ~ .,
+                         data = train.data,
+                         method = "svmRadial",
+                         trControl = svm.ctrl, preProcess=c("center", "scale")
+                         )
+
+
+```
+
+TODO: WRITEUP
+
+#### Simple Model Comparison
+
+```{r}
+t <- list(lasso=model.lasso, 
+          ridge=model.ridge, 
+          elastic=model.enet, 
+          rf=model.rf,
+          gbm=model.gbm,
+          svmlinear=model.svm.linear,
+          svmradial=model.svm.radial
+          )
+
+model.compare <- caret::resamples(t)
+
+summary(model.compare)
+```
+
+TODO: WRITEUP
 
 ## Complex Models 
 Performed by 
